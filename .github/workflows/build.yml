@@ -85,6 +85,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: config-before-build
+          include-hidden-files: true
           path: |
             ImmortalWrt/feeds.conf.default
             ImmortalWrt/.config
