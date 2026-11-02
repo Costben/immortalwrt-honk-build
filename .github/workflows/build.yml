@@ -1,0 +1,165 @@
+name: 🚀 编译 (Build)
+
+on:
+  workflow_dispatch:
+    inputs:
+      owner:
+        description: 'ImmortalWrt 仓库拥有者 (Owner)'
+        type: string
+        required: true
+        default: 'immortalwrt'
+      repo:
+        description: 'ImmortalWrt 仓库名称 (Repo)'
+        type: string
+        required: true
+        default: 'immortalwrt'
+      branch:
+        description: 'ImmortalWrt 分支 (Branch)'
+        type: string
+        required: true
+        default: 'openwrt-25.12'
+      multithreading:
+        description: '开启多线程编译 (Enable multithreading build)'
+        type: boolean
+        default: true
+      ssh:
+        description: '使用 ssh 连接到编译环境 (Connect to build environment using ssh)'
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    if: ${{ !inputs.ssh }}
+    runs-on: ubuntu-latest
+    name: 🚀 编译 (Build)
+    steps:
+      - name: 清理磁盘空间 (Free disk space)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          sudo docker image prune -a -f || true
+          df -h
+
+      - name: 安装编译依赖 (Install build packages)
+        run: |
+          sudo apt update
+          sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+
+      - name: 克隆当前仓库 (Clone current repo)
+        uses: actions/checkout@v4
+
+      - name: 克隆 ImmortalWrt 仓库 (Clone ImmortalWrt repo)
+        uses: actions/checkout@v4
+        with:
+          repository: '${{inputs.owner}}/${{inputs.repo}}'
+          ref: ${{inputs.branch}}
+          path: ImmortalWrt
+
+      - name: 复制配置文件并运行 diy.sh (Copy configs and run diy.sh)
+        working-directory: ImmortalWrt
+        run: |
+          cp -f ../feeds.conf.default feeds.conf.default
+          cp -f ../diy.sh diy.sh
+          chmod +x diy.sh
+          ./diy.sh
+
+      - name: 更新并安装 feeds (Update and install feeds)
+        working-directory: ImmortalWrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: 生成编译配置 (Apply .config & defconfig)
+        working-directory: ImmortalWrt
+        run: |
+          cp -f ../.config .config
+          make defconfig
+
+      - name: 下载软件包 (Download packages)
+        working-directory: ImmortalWrt
+        run: |
+          make download -j8 || make download -j1 V=s
+          find dl -size -1024c -exec ls -l {} \;
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: 编译前上传配置 (Upload config before build)
+        uses: actions/upload-artifact@v4
+        with:
+          name: config-before-build
+          path: |
+            ImmortalWrt/feeds.conf.default
+            ImmortalWrt/.config
+
+      - name: 编译固件 (Compile firmware)
+        working-directory: ImmortalWrt
+        run: |
+          if [ "${{inputs.multithreading}}" = "true" ]; then
+            make -j$(nproc) || make -j1 V=s
+          else
+            make -j1 V=s
+          fi
+
+      - name: 整理固件文件 (Organize files)
+        working-directory: ImmortalWrt
+        run: |
+          cd bin/targets/*/*
+          rm -rf packages
+          echo "FIRMWARE_PATH=$PWD" >> $GITHUB_ENV
+
+      - name: 上传编译结果到 Artifact (Upload build result)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImmortalWrt-x86_64-combined-efi
+          path: ${{ env.FIRMWARE_PATH }}/*
+
+  build-ssh:
+    if: ${{ inputs.ssh }}
+    name: 🚀 编译 (Build) - SSH
+    runs-on: ubuntu-latest
+    steps:
+      - name: 清理磁盘空间 (Free disk space)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h
+
+      - name: 安装编译依赖 (Install build packages)
+        run: |
+          sudo apt update
+          sudo apt install -y ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache cmake cpio curl device-tree-compiler fastjar flex gawk gettext gcc-multilib g++-multilib git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool lrzsz mkisofs msmtp ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+
+      - name: 克隆当前仓库 (Clone current repo)
+        uses: actions/checkout@v4
+
+      - name: 克隆 ImmortalWrt 仓库 (Clone ImmortalWrt repo)
+        uses: actions/checkout@v4
+        with:
+          repository: '${{inputs.owner}}/${{inputs.repo}}'
+          ref: ${{inputs.branch}}
+          path: ImmortalWrt
+
+      - name: 复制配置文件并更新 feeds (Setup feeds & config)
+        working-directory: ImmortalWrt
+        run: |
+          cp -f ../feeds.conf.default feeds.conf.default
+          cp -f ../diy.sh diy.sh
+          chmod +x diy.sh
+          ./diy.sh
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          cp -f ../.config .config
+          make defconfig
+
+      - name: 开启 SSH 服务 (Start SSH service)
+        uses: lhotari/action-upterm@v1
+        with:
+          wait-timeout-minutes: 30
+
+      - name: 编译固件 (Compile firmware)
+        working-directory: ImmortalWrt
+        run: |
+          make -j$(nproc) || make -j1 V=s
+
+      - name: 上传编译结果到 Artifact (Upload build result)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImmortalWrt-x86_64-combined-efi
+          path: ImmortalWrt/bin/targets/*/*
